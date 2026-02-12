@@ -1,0 +1,206 @@
+---
+title: "Statistical Reasoning 3"
+author: "Luis Rouzaud & Katelin Subbie
+
+"
+format: pdf
+editor: visual
+---
+
+```{r}
+
+# Run this to install some data packages
+devtools::install_github("rmcelreath/rethinking")
+
+library(rethinking)
+
+library(brms) # for statistics
+library(tidyverse) # for data wrangling
+library(daggity)
+```
+
+## Q1.1 Making the DAG:
+
+![](images/dag.png)
+
+## Q1.2: 
+
+Forks in our DAG
+
+-   U \<- A -\> C
+
+-   B \<- C -\> Y
+
+-   X \<- U -\> B
+
+## Q1.3:
+
+Colliders in our DAG:
+
+-   U -\> B \<- C
+
+-   C -\> Y \<- X
+
+## Q1.4
+
+![](images/dag2.png)
+
+## Q1.5
+
+How many paths connect X to Y?
+
+-   X -\> Y
+
+-   X \<- U -\> B \<- C -\> Y
+
+-   X \<- U -\> B \<- C \<- V -\> Y
+
+-   X \<- U \<- A -\> C -\> Y
+
+-   X \<- U \<- A -\> C \<- V -\> Y
+
+## Q1.6 Identify open backdoor paths:
+
+All those paths that have no colliders in them:
+
+-   X \<- U \<- A -\> C -\> Y
+
+## Q1.7 Identify variables to close backdoors:
+
+We would condition on A, because U is an unknown variable, so we cannot condition on it. Conditioning on A would close this backdoor path.
+
+## 2. Foxes
+
+```{r}
+
+# Load in the fox data
+data(foxes)
+```
+
+```{r}
+
+# Check out the fox data
+?foxes
+head(foxes)
+```
+
+![](foxDAG.jpg){alt="fox DAG"}
+
+We see:
+
+-   a collider (avgfood -\> weight \<- groupsize)
+
+-   a fork (groupsize \<- avgfood -\> weight)
+
+-   several pipes:
+
+    -   Pipe1: area -\> avgfood -\> groupsize -\> weight
+
+    -   Pipe2: area -\> avgfood -\> groupsize
+
+    -   Pipe3: avgfood -\> groupsize -\> weight
+
+    -   Pipe4: area -\> avgfood -\> weight
+
+```{r}
+
+
+fox_dat <- foxes %>%
+  as_tibble() %>%
+  select(area, avgfood, weight, groupsize) %>%
+  mutate(across(everything(), standardize))
+
+```
+
+```{r}
+
+n <- 1000
+priorsims <- tibble(group = seq_len(n),
+       alpha = rnorm(n, 0, 0.2), # prior for alpha
+       beta = rnorm(n, 0, 2)) %>% # prior for beta
+  expand(nesting(group, alpha, beta), # the expand function gives us all possible combinations of the arguments
+         area = seq(from = -2, to = 2, length.out = 100)) %>% # set up a range of areas
+  mutate(weight = alpha + beta * area) # calculate weight from the parameters and area
+```
+
+```{r}
+
+ggplot(priorsims, aes(x = area, y = weight, group = group)) +
+  geom_line(alpha = 1 / 10) +
+  labs(x = "Standardized Area", y = "Standardized Weight")
+```
+
+## Q2.2
+
+We consider 3 kg to be a reasonable minimum weight for a fox.
+
+## Q2.3
+
+We think 10 kg to be a reasonable maximum weight for a fox.
+
+## Q2.4
+
+Remake your prior predictive simulation plot and add two horizontal lines, one each for the minimum and maximum weights that you just provided. Before plotting, make sure to *standardize* your values in kg so that they are plotted as centered values in units of standard deviation (i.e., subtract the mean and divide by the standard deviation of foxes\$weight).
+
+```{r}
+
+minweight <- 3
+maxweight <- 10
+
+meanweight <- mean(foxes$weight)
+sdweight <- sd(foxes$weight)
+
+
+standardmin <- ((minweight - meanweight) / sdweight)
+standardmin
+
+standardmax <- ((maxweight - meanweight) / sdweight)
+standardmax
+
+ggplot(priorsims, aes(x = area, y = weight, group = group)) +
+  geom_line(alpha = 1 / 10) +
+  labs(x = "Standardized Area", y = "Standardized Weight")+
+  geom_hline(yintercept = standardmin)+
+  geom_hline(yintercept = standardmax)
+
+
+```
+
+No, it seems like most of the priors do not exceed the data, because most of the plot fits within the range that we defined (standardized min = -1.29 and standardized max = 4.26).
+
+## 2.6 Refine priors: 
+
+Remake and plot a set of prior simulations that use priors you think are reasonable (adjusting the code from above would work well for this). Be sure to include the minimum and maximum fox weights that you expect. You can iterate on this a few times (simulate, plot, adjust, etc.) until you arrive at priors that make sense to you.
+
+```{r}
+
+
+n <- 1000
+priorsims <- tibble(group = seq_len(n),
+       alpha = rnorm(n, 0, 0.2), # prior for alpha
+       beta = rnorm(n, 0, 0.25)) %>% # updated prior for beta
+  expand(nesting(group, alpha, beta), # the expand function gives us all possible combinations of the arguments
+         area = seq(from = -2, to = 2, length.out = 100)) %>% # set up a range of areas
+  mutate(weight = alpha + beta * area) # calculate weight from the parameters and area
+
+ggplot(priorsims, aes(x = area, y = weight, group = group)) +
+  geom_line(alpha = 1 / 10) +
+  labs(x = "Standardized Area", y = "Standardized Weight")+
+  geom_hline(yintercept = standardmin)+
+  geom_hline(yintercept = standardmax)
+
+```
+
+```{r}
+
+
+food_on_area <- brm(avgfood ~ 1 + area, 
+                    data = fox_dat, 
+                    family = gaussian,
+                    # Here we set the priors that we investigated earlier
+                    prior = c(prior(normal(0, 0.2), class = Intercept),
+                              prior(normal(0, 0.25), class = b,),
+                              prior(exponential(1), class = sigma)),
+                    iter = 4000, warmup = 2000, chains = 4, cores = 4, seed = 1234,
+                    file = "output/food_on_area")
+```
